@@ -1,0 +1,166 @@
+---
+title: "Decline in Baltic Sea cod body conditon"
+author: "Max Lindmark"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    embed-resources: true
+    fig-width: 8
+    toc: true
+    #fig-asp: 0.618
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+```{r}
+#| warning: false
+#| message: false
+
+library(readr)
+library(dplyr)
+library(rnaturalearth)
+library(sf)
+library(ggplot2); theme_set(theme_light())
+library(viridis)
+```
+
+### Introduction
+In this vignette, I present showcase the data used in Lindmark *et al.*, (2023) on body condition of Eastern Baltic cod, between years 1993--2021. We use data from DATRAS (<https://datras.ices.dk/>), and the process to clean and prepare data, including adding covariates, can be found here: <https://github.com/maxlindmark/cod-condition/tree/master/R/clean_data>.
+
+Now we'll read the cleaned data. To bypass size limitations on GitHub, I read it in two stages:
+
+```{r}
+#| warning: false
+#| message: false
+
+d1 <- read_csv("https://raw.githubusercontent.com/maxlindmark/cod-condition/master/data/for_analysis/mdat_cond_(1_2).csv")
+d2 <- read_csv("https://raw.githubusercontent.com/maxlindmark/cod-condition/master/data/for_analysis/mdat_cond_(2_2).csv")
+
+d <- bind_rows(d1, d2)
+```
+
+We have nearly 100.000 observations of cod condition. In the paper, we develop an spatiotemporally standardize condition index, using geostatistical models.
+
+```{r}
+#| warning: false
+#| message: false
+
+glimpse(d)
+```
+
+### Visualize data
+
+First make a simple map function:
+
+```{r}
+#| warning: false
+#| message: false
+
+# Specify map ranges
+ymin = 52; ymax = 60; xmin = 10; xmax = 24
+
+map_data <- ne_countries(
+  scale = "large",
+  returnclass = "sf", continent = "europe")
+
+# Crop the polygon for plotting and efficiency:
+# st_bbox(map_data) # find the rough coordinates
+sf::sf_use_s2(FALSE)
+# https://stackoverflow.com/questions/68478179/how-to-resolve-spherical-geometry-failures-when-joining-spatial-data
+
+swe_coast <- suppressWarnings(suppressMessages(
+  st_crop(map_data,
+          c(xmin = xmin, ymin = ymin, xmax = xmax, ymax = ymax))))
+
+# Transform our map into UTM 33 coordinates, which is the equal-area projection we fit in:
+utm_zone33 <- 32633
+swe_coast_proj <- sf::st_transform(swe_coast, crs = utm_zone33)
+
+# Make default base map plot
+xmin2 <- 303000; xmax2 <- 916000; xrange <- xmax2 - xmin2
+ymin2 <- 5980000; ymax2 <- 6450000; yrange <- ymax2 - ymin2
+
+map_plot <- 
+ggplot(swe_coast_proj) + 
+  xlim(xmin2, xmax2) +
+  ylim(ymin2, ymax2) +
+  labs(x = "Longitude", y = "Latitude") +
+  geom_sf(size = 0.3)
+```
+
+Visualize data in space
+
+```{r}
+#| warning: false
+#| message: false
+
+d_sum <- d |> 
+  summarise(n = n(), .by = c(X, Y, year))
+
+map_plot + 
+  geom_point(data = d_sum, aes(X*1000, Y*1000, fill = year, size = n),
+             alpha = 0.5, shape = 21, stroke = 0.1) +
+  scale_fill_viridis(option = "F") +
+  scale_size_continuous(
+    range = c(0.5, 5)
+  )
+```
+
+We can also visualize trends over time
+
+```{r}
+#| warning: false
+#| message: false
+#| fig-height: 8
+
+# Calculate a quick le Cren condition factor
+a <- exp(coef(lm(log(weight_g) ~ log(length_cm), data = d))[1])
+b <- coef(lm(log(weight_g) ~ log(length_cm), data = d))[2]
+
+d <- d |>
+  mutate(condition = weight_g / (a*length_cm^b)) |> 
+  filter(condition > 0.3 & condition < 2)
+
+d |> 
+  summarise(n = n(),
+            mean_cond = median(condition),
+            .by = c(year, ices_rect)) |> 
+  ggplot(aes(year, mean_cond, color = ices_rect, size = n)) + 
+  geom_jitter(height = 0, alpha = 0.65) + 
+  labs(x = "Year", y = "Mean condition", color = "ICES\nrectangle") +
+  theme(legend.position = "bottom") + 
+  guides(color = guide_legend(ncol = 8),
+         size = guide_legend(ncol = 1)) +
+  geom_smooth(aes(year, mean_cond), method = "gam", formula = y~s(x, k=5),
+              inherit.aes = FALSE, color = "gray30")
+```
+
+To put this into context: a change in condition factor by two units leads to a 16% decline in weight for a cod of 30 cm
+
+```{r}
+# Standard weight of a 30 cm cod (W = K*a*L^b)
+a*30^b
+
+# For K = 1.2
+1.2*a*30^b
+
+(((a*30^b) - (1.2*a*30^b)) / (1.2*a*30^b))*100
+```
+
+
+
+### References
+Lindmark, M., Anderson, S. C., Gogina, M., & Casini, M. (2023). Evaluating drivers of spatiotemporal variability in individual condition of a bottom-associated marine fish, Atlantic cod (Gadus morhua). ICES Journal of Marine Science, 80(5), 1539–1550. <https://doi.org/10.1093/icesjms/fsad084>
+
+### Sessioninfo
+
+```{r}
+sessionInfo()
+```
+
